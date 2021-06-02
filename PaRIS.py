@@ -7,14 +7,15 @@ from scipy.misc import derivative
 
 
 NP = 100
-T = 10
+T = 1000
 N_tilde = 2
 time_total = 0
 trail_count = 0
 x_dim = 1
 y_dim = 1
-theta_dim = 3
-theta = [0.7, 0.2**2, 1**2]
+theta_dim = 2
+tao_dim = theta_dim
+theta_true = np.array([0.8, 0.1])
 
 
 def SM_truth(x, theta):
@@ -23,7 +24,7 @@ def SM_truth(x, theta):
 
 
 def SM_noise(theta):
-    return math.sqrt(theta[1]) * np.random.randn()
+    return np.random.randn()
 
 
 def SM(x, theta):
@@ -32,17 +33,19 @@ def SM(x, theta):
 
 
 def q(x, xt, theta):
-    res = 1/math.sqrt(2*math.pi*theta[1])*math.exp(-(xt - SM_truth(x, theta))**2/(2*theta[1]))
+    res = 1/math.sqrt(2*math.pi*1**2)*math.exp(-(xt - SM_truth(x, theta))**2/(2*1**2))
     return res
 
 
-def derivative_q(theta):
-    derivative(q, theta, dx=1e-6)
-    return
+def derivative_q(x, xt, theta):  # 对数似然函数求导
+    res = np.zeros(theta_dim)
+    res[0] = x * (xt- theta[0]*x)
+    res[1] = 0
+    return res
 
 
 def MM_truth(x, theta):
-    y = math.sqrt(theta[2]) * math.exp(x/2.0)
+    y = theta[1] * x
     return y
 
 
@@ -51,24 +54,27 @@ def MM_noise(theta):
 
 
 def MM(x, theta):
-    res = MM_truth(x, theta) * MM_noise(theta)
+    res = MM_truth(x, theta) + MM_noise(theta)
     return res
 
 
 def g(x, y, theta):
     # res = 1/math.sqrt(2*math.pi*theta[2])*math.exp(-(y - MM_truth(x, theta))**2/(2*theta[2]))
-    res = 1/math.sqrt( 2 * math.pi * (theta[2]*math.exp(x)) ) \
-          *math.exp( -(y-MM_truth(x, theta))**2 / (2*theta[2]*math.exp(x)) )
+    res = 1/math.sqrt(2*math.pi*1**2)*math.exp(-(y - MM_truth(x, theta))**2/(2*1**2))
     return res
 
 
-def derivative_g(x, xt, theta):
-    return
+def derivative_g(x, y, theta):    
+    res = np.zeros(theta_dim)
+    res[0] = 0
+    res[1] = x * (y- theta[1]*x)
+    return res
 
 
-def h_function(x, xt):
-    # dg_theta = 
-    return x
+def h_function(x, xt, y, theta):
+    dq_theta = derivative_q(x, xt, theta)
+    dg_theta = derivative_g(x, y, theta)
+    return dq_theta + dg_theta
 
 
 def resample(weights):  # weight已经归一化
@@ -114,7 +120,7 @@ def multinomial_sampling(w, n):
     return indices
 
     
-def bootstrap_pf(particle, w, y):
+def bootstrap_pf(particle, w, y, theta):
     wt = np.zeros(NP)
     pt = np.zeros((x_dim, NP))
     wt = w / np.sum(w)
@@ -126,9 +132,9 @@ def bootstrap_pf(particle, w, y):
     return pt, wt
 
 
-def FFBSm(particle, w, tao, y):
-    pt, wt = bootstrap_pf(particle, w, y)
-    taot = np.zeros(NP)
+def FFBSm(particle, w, tao, y, yt, theta):
+    pt, wt = bootstrap_pf(particle, w, yt, theta)
+    taot = np.zeros((tao_dim, NP))
     for i in range(NP):
         # print('processing particle', i)
         w_sum = 0
@@ -140,11 +146,11 @@ def FFBSm(particle, w, tao, y):
             # particlej = particle[:, j]
             # pti = pt[:, i]
             # q = 1/math.sqrt(2*math.pi*0.2**2)*math.exp(-(particlej*0.7 - pti)**2 / (2*0.2**2))
-            taot[i] += w[j] * q(particle[:, j], pt[:, i], theta) / w_sum * (tao[j] + h_function(particle[:, j], pt[:, i]))
+            taot[:, i] += w[j] * q(particle[:, j], pt[:, i], theta) / w_sum * (tao[:, j] + h_function(particle[:, j], pt[:, i], y, theta))
     return pt, wt, taot
 
 
-def accept_reject_backwark_sampling(particle, w, pt, wt, N_tilde):
+def accept_reject_backwark_sampling(particle, w, pt, wt, N_tilde, theta):
     # global time_total
     # global trail_count
     # trail = 0
@@ -190,13 +196,13 @@ def accept_reject_backwark_sampling(particle, w, pt, wt, N_tilde):
     return J
 
 
-def PaRIS(particle, w, tao, y, N_tilde):
+def PaRIS(particle, w, tao, y, yt, N_tilde, theta):
     # time_total = 0
     # global trail_count
-    pt, wt = bootstrap_pf(particle, w, y)
-    taot = np.zeros(NP)
+    pt, wt = bootstrap_pf(particle, w, yt, theta)
+    taot = np.zeros((tao_dim, NP))
     # trail_count = 0
-    J = accept_reject_backwark_sampling(particle, w, pt, wt, N_tilde)
+    J = accept_reject_backwark_sampling(particle, w, pt, wt, N_tilde, theta)
     for i in range(NP):
         # print('processing particle', i)
         # aj_time_start = time.time()
@@ -204,39 +210,27 @@ def PaRIS(particle, w, tao, y, N_tilde):
         # time_total += aj_time_end-aj_time_start
         # print("accept-reject time:", time_total)
         for j in range(N_tilde):
-            taot[i] += tao[J[i, j]] + h_function(particle[:, J[i, j]], pt[:, i])
-        taot[i] = taot[i]/N_tilde
+            taot[:, i] += tao[:, J[i, j]] + h_function(particle[:, J[i, j]], pt[:, i], y, theta)
+        taot[:, i] = taot[:, i]/N_tilde
     # print('rj_time', time_total)
     # trail_count = trail_count / float(NP)
     # print('trail count', trail_count)
     return pt, wt, taot
 
 
-def PaRISian_RML(x0, theta, T):
-    for i in range(theta_dim):
-        theta[i] = 0
-    theta0 = np.random.random()
-    for i in range(NP):
-        particle[:, i] = x0 + SM_noise(theta)  # 初始粒子
-    particle = x0 + np.zeros((x_dim, NP))
-    w = np.zeros(NP) + 1.0 / NP
-    for t in range(T):
-        pt, wt = bootstrap_pf()
-    return
-
 if __name__ == "__main__":
-    '''
+    
     x = np.zeros((x_dim, T))
     y = np.zeros((y_dim, T))
     particle = np.zeros((x_dim, NP))
-    x0 = 50  # 粒子初值
+    x0 = 100  # 粒子初值
     w = np.zeros(NP) + 1.0 / NP
-    tao = np.zeros(NP)
+    tao = np.zeros((tao_dim, NP))
     p_his = np.zeros((T, NP))
     w_his = np.zeros((T, NP))
     # tm = np.zeros((1, NP))
     for i in range(NP):
-        particle[:, i] = x0 + SM_noise(theta)  # 初始粒子
+        particle[:, i] = x0 + SM_noise(theta_true)  # 初始粒子
         # tao[0, i] = particle[0, i]
     # indices = resample(w)
     # plt.hist(particle, density=True, label='sampling')
@@ -246,39 +240,40 @@ if __name__ == "__main__":
         if i == 0:
             x[:, i] = x0
         else:
-            x[:, i] = SM_truth(x[:, i-1], theta)  # 真值
-        y[:, i] = MM(x[:, i], theta)  # 带噪声观测
+            x[:, i] = SM_truth(x[:, i-1], theta_true)  # 真值
+        y[:, i] = MM(x[:, i], theta_true)  # 带噪声观测
     time_start = time.time()
     for i in range(T-1):
         p_his[i, :] = particle
         w_his[i, :] = w
         # particle, w = bootstrap_pf(particle, w, y[:, i+1])
-        pt, wt, taot = PaRIS(particle, w, tao, y[:, i+1], N_tilde)
-        # pt, wt, taot = FFBSm(particle, w, tao, y[:, i+1])
+        pt, wt, taot = PaRIS(particle, w, tao, y[:, i], y[:, i+1], N_tilde, theta_true)
+        # pt, wt, taot = FFBSm(particle, w, tao, y[:, i], y[:, i+1], theta_true)
         particle, w, tao = pt, wt, taot
         print(i, "is over")
     p_his[T-1, :] = particle
     w_his[T-1, :] = w
     time_end = time.time()
+    
     sum = 0
     for k in range(T-1):
-        sum += h_function(x[:, k], x[:, k+1])
+        sum += h_function(x[:, k], x[:, k+1], y[0, k], theta_true)
     est = 0
     est_h = 0
     for i in range(NP):
         est = est + particle[:, i]*w[i]
-        est_h += w[i]*tao[i]
+        est_h += w[i]*tao[:, i]
     est = est / np.sum(w)
     est_h_final = est_h / np.sum(w)
     k = np.sum(w)
     print('truth', sum)
     print('estimated', est_h_final)
     print('totally cost', time_end - time_start)
-    '''
+    
     '''
     w_test = np.zeros(6) + 1/6.0
     indices_test = multinomial_sampling(w_test, 12)
     print(indices_test)
     '''
-    derivative(q, theta, dx=1e-6)
+    # derivative(q, theta, dx=1e-6)
     print("ok")
